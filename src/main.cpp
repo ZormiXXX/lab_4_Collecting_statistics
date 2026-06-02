@@ -1,5 +1,5 @@
 #include <cmath>
-#include <filesystem>
+#include <cerrno>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -8,6 +8,12 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+#endif
 #include "../include/ArraySequence.hpp"
 #include "../include/LazySequence.hpp"
 #include "../include/OnlineStatistics.hpp"
@@ -32,8 +38,19 @@ constexpr const char* kMainMenu = R"(
 )";
 
 void EnsureOutputDirectories() {
-    std::filesystem::create_directories("output");
-    std::filesystem::create_directories("data");
+    auto ensureDirectory = [](const char* path) {
+#ifdef _WIN32
+        int result = _mkdir(path);
+#else
+        int result = mkdir(path, 0755);
+#endif
+        if (result != 0 && errno != EEXIST) {
+            throw InvalidState(std::string("не удалось создать директорию: ") + path);
+        }
+    };
+
+    ensureDirectory("output");
+    ensureDirectory("data");
 }
 
 double ParseDoubleStrict(const std::string& token) {
@@ -57,6 +74,40 @@ std::string SerializeDouble(double value) {
     return stream.str();
 }
 
+std::string BuildStatisticsSummaryJson(const StatisticsSnapshot& summary) {
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(6)
+           << "{\n"
+           << "  \"count\": " << summary.count << ",\n"
+           << "  \"lastValue\": " << summary.lastValue << ",\n"
+           << "  \"minValue\": " << summary.minValue << ",\n"
+           << "  \"maxValue\": " << summary.maxValue << ",\n"
+           << "  \"mean\": " << summary.mean << ",\n"
+           << "  \"variance\": " << summary.variance << ",\n"
+           << "  \"standardDeviation\": " << summary.standardDeviation << ",\n"
+           << "  \"median\": " << summary.median << ",\n"
+           << "  \"windowAverage\": " << summary.windowAverage << ",\n"
+           << "  \"anomalyDetected\": " << (summary.anomalyDetected ? "true" : "false") << ",\n"
+           << "  \"anomalyZScore\": " << summary.anomalyZScore << ",\n"
+           << "  \"anomalyCount\": " << summary.anomalyCount << "\n"
+           << "}";
+    return stream.str();
+}
+
+std::string FormatSnapshotRow(size_t index, double value, const StatisticsSnapshot& snapshot) {
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(3)
+           << std::setw(6) << index
+           << std::setw(12) << value
+           << std::setw(12) << snapshot.mean
+           << std::setw(12) << snapshot.median
+           << std::setw(12) << snapshot.minValue
+           << std::setw(12) << snapshot.maxValue
+           << std::setw(12) << snapshot.windowAverage
+           << std::setw(10) << (snapshot.anomalyDetected ? "YES" : "no");
+    return stream.str();
+}
+
 template<class T>
 T ReadNumber(const std::string& prompt) {
     while (true) {
@@ -75,7 +126,10 @@ T ReadNumber(const std::string& prompt) {
 std::string ReadLine(const std::string& prompt) {
     std::cout << prompt;
     std::string line;
-    std::getline(std::cin >> std::ws, line);
+    if (std::cin.peek() == '\n') {
+        std::cin.get();
+    }
+    std::getline(std::cin, line);
     return line;
 }
 
@@ -194,7 +248,7 @@ void PrintPrefix(const DoubleLazySequence& sequence, size_t count) {
 }
 
 void PrintLengthInfo(const DoubleLazySequence& sequence) {
-    std::cout << "Длина: " << sequence.GetLength() << "\n";
+    std::cout << "Длина: " << sequence.GetLength().ToString() << "\n";
     std::cout << "Материализовано элементов: " << sequence.GetMaterializedCount() << "\n";
 }
 
@@ -316,7 +370,9 @@ std::unique_ptr<ReadOnlyStream<double>> CreateReadStreamFromUser() {
     std::cout << "\nИсточник потока:\n"
               << "  1. Строка чисел\n"
               << "  2. LazySequence\n"
-              << "  3. Файл\n";
+              << "  3. Текстовый файл (по одному числу в строке)\n"
+              << "  4. CSV-файл\n"
+              << "  5. JSON-массив\n";
     int choice = ReadNumber<int>("Выбор: ");
 
     switch (choice) {
@@ -334,6 +390,24 @@ std::unique_ptr<ReadOnlyStream<double>> CreateReadStreamFromUser() {
                 path = "data/sample_stream.txt";
             }
             return std::make_unique<FileReadStream<double>>(path, ParseDoubleStrict);
+        }
+        case 4: {
+            std::string path = ReadLine("Путь к CSV-файлу (Enter для data/sample_stream.csv): ");
+            if (path.empty()) {
+                path = "data/sample_stream.csv";
+            }
+            return std::make_unique<CsvReadStream<double>>(
+                CsvReadStream<double>::FromFile(path, ParseDoubleStrict)
+            );
+        }
+        case 5: {
+            std::string path = ReadLine("Путь к JSON-файлу (Enter для data/sample_stream.json): ");
+            if (path.empty()) {
+                path = "data/sample_stream.json";
+            }
+            return std::make_unique<JsonArrayReadStream<double>>(
+                JsonArrayReadStream<double>::FromFile(path, ParseDoubleStrict)
+            );
         }
         default:
             throw InputError("неизвестный источник потока");
@@ -461,6 +535,14 @@ void RunOnlineStatisticsDemo() {
     }
 
     StatisticsSnapshot summary = stats.GetSnapshot();
+    FileWriteStream<std::string> jsonWriter(
+        "output/latest_stats_summary.json",
+        [](const std::string& line) { return line; }
+    );
+    jsonWriter.Open();
+    jsonWriter.Write(BuildStatisticsSummaryJson(summary));
+    jsonWriter.Close();
+
     std::cout << "\nИтоговая сводка:\n";
     std::cout << "  Обработано элементов: " << summary.count << "\n";
     std::cout << "  Mean: " << std::fixed << std::setprecision(6) << summary.mean << "\n";
@@ -469,6 +551,7 @@ void RunOnlineStatisticsDemo() {
     std::cout << "  StdDev: " << summary.standardDeviation << "\n";
     std::cout << "  Выбросов обнаружено: " << summary.anomalyCount << "\n";
     std::cout << "CSV-лог сохранён в output/latest_stats.csv\n";
+    std::cout << "JSON-сводка сохранена в output/latest_stats_summary.json\n";
 }
 
 }  

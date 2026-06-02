@@ -1,5 +1,4 @@
 #pragma once
-#include <ostream>
 #include <string>
 #include "Exceptions.hpp"
 
@@ -9,84 +8,49 @@ private:
     bool infinite;
 
 public:
-    Cardinal() : value(0), infinite(false) {}
+    Cardinal();
+    explicit Cardinal(size_t finiteValue);
 
-    explicit Cardinal(size_t finiteValue) : value(finiteValue), infinite(false) {}
+    static Cardinal Finite(size_t finiteValue);
+    static Cardinal Infinite();
 
-    static Cardinal Finite(size_t finiteValue) {
-        return Cardinal(finiteValue);
-    }
+    bool IsInfinite() const;
+    bool IsFinite() const;
+    size_t AsFinite() const;
+    std::string ToString() const;
+    Cardinal Add(size_t delta) const;
 
-    static Cardinal Infinite() {
-        Cardinal cardinal;
-        cardinal.infinite = true;
-        cardinal.value = 0;
-        return cardinal;
-    }
+    static Cardinal Add(const Cardinal& left, const Cardinal& right);
+    static Cardinal Min(const Cardinal& left, const Cardinal& right);
+    static Cardinal Max(const Cardinal& left, const Cardinal& right);
 
-    bool IsInfinite() const {
-        return infinite;
-    }
-
-    bool IsFinite() const {
-        return !infinite;
-    }
-
-    size_t AsFinite() const {
-        if (infinite) {
-            throw InfinityError("cardinality is infinite");
-        }
-        return value;
-    }
-
-    std::string ToString() const {
-        return infinite ? "omega" : std::to_string(value);
-    }
-
-    Cardinal Add(size_t delta) const {
-        if (infinite) {
-            return Infinite();
-        }
-        return Finite(value + delta);
-    }
-
-    static Cardinal Add(const Cardinal& left, const Cardinal& right) {
-        if (left.IsInfinite() || right.IsInfinite()) {
-            return Infinite();
-        }
-        return Finite(left.value + right.value);
-    }
-
-    static Cardinal Min(const Cardinal& left, const Cardinal& right) {
-        if (left.IsInfinite()) {
-            return right;
-        }
-        if (right.IsInfinite()) {
-            return left;
-        }
-        return Finite(left.value < right.value ? left.value : right.value);
-    }
-
-    static Cardinal Max(const Cardinal& left, const Cardinal& right) {
-        if (left.IsInfinite() || right.IsInfinite()) {
-            return Infinite();
-        }
-        return Finite(left.value > right.value ? left.value : right.value);
-    }
-
-    bool operator==(const Cardinal& other) const {
-        if (infinite != other.infinite) {
-            return false;
-        }
-        return infinite || value == other.value;
-    }
-
-    bool operator!=(const Cardinal& other) const {
-        return !(*this == other);
-    }
+    bool operator==(const Cardinal& other) const;
+    bool operator!=(const Cardinal& other) const;
 };
 
-inline std::ostream& operator<<(std::ostream& stream, const Cardinal& cardinal) {
-    stream << cardinal.ToString();
-    return stream;
-}
+class Ordinal {
+private:
+    size_t offset;
+    bool hasOmega;
+
+public:
+    Ordinal();
+    explicit Ordinal(size_t finiteValue);
+
+    static Ordinal Finite(size_t finiteValue);
+    static Ordinal Omega();
+    static Ordinal OmegaPlus(size_t finiteOffset);
+
+    bool IsFinite() const;
+    bool HasOmega() const;
+    bool IsPureOmega() const;
+    size_t AsFinite() const;
+    size_t GetOffset() const;
+    Ordinal Add(size_t delta) const;
+    std::string ToString() const;
+
+    bool operator==(const Ordinal& other) const;
+    bool operator!=(const Ordinal& other) const;
+};
+
+#include "Cardinal.tpp"

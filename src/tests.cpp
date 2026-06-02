@@ -5,6 +5,7 @@
 #include <sstream>
 #include <string>
 #include "../include/ArraySequence.hpp"
+#include "../include/CircularBuffer.hpp"
 #include "../include/LazySequence.hpp"
 #include "../include/OnlineStatistics.hpp"
 #include "../include/Streams.hpp"
@@ -57,6 +58,23 @@ static int currentTestAssertions = 0;
         std::cout << COLOR_RED "  FAIL" COLOR_RESET << " " << msg << std::endl; \
         std::cout << "    " COLOR_YELLOW "Ожидалось: " COLOR_RESET << expectedValue << std::endl; \
         std::cout << "    " COLOR_RED "Получено: " COLOR_RESET << actualValue << std::endl; \
+        currentTestPassed = false; \
+    } \
+} while (0)
+
+#define ASSERT_CARDINAL_EQ(expected, actual, msg) do { \
+    totalAssertions++; \
+    currentTestAssertions++; \
+    Cardinal expectedValue = (expected); \
+    Cardinal actualValue = (actual); \
+    if (expectedValue == actualValue) { \
+        totalPassed++; \
+        std::cout << COLOR_GREEN "  OK  " COLOR_RESET << msg << std::endl; \
+        std::cout << "    Ожидалось: " << expectedValue.ToString() << ", Получено: " << actualValue.ToString() << std::endl; \
+    } else { \
+        std::cout << COLOR_RED "  FAIL" COLOR_RESET << " " << msg << std::endl; \
+        std::cout << "    " COLOR_YELLOW "Ожидалось: " COLOR_RESET << expectedValue.ToString() << std::endl; \
+        std::cout << "    " COLOR_RED "Получено: " COLOR_RESET << actualValue.ToString() << std::endl; \
         currentTestPassed = false; \
     } \
 } while (0)
@@ -155,7 +173,7 @@ TEST(TestLazySequenceFiniteMemoization) {
     ArraySequence<int> seed(values, 4);
     LazySequence<int> sequence(&seed);
 
-    ASSERT_EQ(Cardinal::Finite(4), sequence.GetLength(), "Корректная длина");
+    ASSERT_CARDINAL_EQ(Cardinal::Finite(4), sequence.GetLength(), "Корректная длина");
     ASSERT_EQ(0, static_cast<int>(sequence.GetMaterializedCount()), "До чтения ничего не материализовано");
     ASSERT_EQ(6, sequence.Get(2), "Чтение элемента по индексу");
     ASSERT_EQ(3, static_cast<int>(sequence.GetMaterializedCount()), "Материализован префикс до нужного индекса");
@@ -209,7 +227,7 @@ TEST(TestLazyWhereZipAndSubsequence) {
     LazySequence<int> sequence(&seed);
     LazySequence<int> filtered = sequence.Where([](int value) { return value % 2 == 0; });
 
-    ASSERT_EQ(Cardinal::Finite(3), filtered.GetLength(), "Количество чётных элементов");
+    ASSERT_CARDINAL_EQ(Cardinal::Finite(3), filtered.GetLength(), "Количество чётных элементов");
     ASSERT_EQ(2, filtered.Get(0), "Первый отфильтрованный элемент");
     ASSERT_EQ(6, filtered.Get(2), "Последний отфильтрованный элемент");
 
@@ -242,6 +260,58 @@ TEST(TestInfiniteLazyTake) {
     ASSERT_EQ(3, firstFive.Get(0), "Первый элемент");
     ASSERT_EQ(15, firstFive.Get(4), "Пятый элемент");
     ASSERT_THROWS(arithmetic.GetLast(), InfinityError, "GetLast запрещён для бесконечной последовательности");
+}
+
+TEST(TestOrdinalBasics) {
+    PrintSubHeader("Ординалы n, omega и omega + n");
+    ASSERT_EQ(std::string("7"), Ordinal::Finite(7).ToString(), "Конечный ординал печатается как число");
+    ASSERT_EQ(std::string("omega"), Ordinal::Omega().ToString(), "Чистая omega печатается корректно");
+    ASSERT_EQ(std::string("omega + 3"), Ordinal::OmegaPlus(3).ToString(), "omega + n печатается корректно");
+    ASSERT_TRUE(Ordinal::OmegaPlus(2).HasOmega(), "Ординал с omega содержит omega-часть");
+    ASSERT_EQ(5, static_cast<int>(Ordinal::Omega().Add(5).GetOffset()), "Смещение после omega хранится корректно");
+}
+
+TEST(TestLazySequenceOrdinalAccess) {
+    PrintSubHeader("Доступ к элементам через omega и omega + n");
+    int seedValue[] = {1};
+    ArraySequence<int> seed(seedValue, 1);
+    LazySequence<int> arithmetic(
+        [](size_t, const Sequence<int>* materialized) -> int {
+            return materialized->Get(materialized->GetLength() - 1) + 1;
+        },
+        &seed
+    );
+
+    ASSERT_THROWS(arithmetic.Get(Ordinal::Omega()), IndexOutOfRange, "У обычной бесконечной последовательности нет элемента в omega");
+
+    LazySequence<int> appended = arithmetic.Append(999).Append(1000);
+    ASSERT_EQ(1, appended.Get(0), "Финитный индекс по-прежнему работает");
+    ASSERT_EQ(999, appended.Get(Ordinal::Omega()), "Append к бесконечной последовательности даёт элемент в omega");
+    ASSERT_EQ(1000, appended.Get(Ordinal::OmegaPlus(1)), "Следующий append даёт элемент в omega + 1");
+    ASSERT_EQ(1000, appended.GetLast(), "Для omega + конечный хвост последний элемент доступен");
+    ASSERT_TRUE(appended.TryGet(Ordinal::OmegaPlus(2)).IsNone(), "За пределами omega-хвоста возвращается None");
+}
+
+TEST(TestLazySequenceOrdinalConcatAndMap) {
+    PrintSubHeader("omega-доступ сохраняется после Concat и Map");
+    int seedValue[] = {10};
+    ArraySequence<int> seed(seedValue, 1);
+    LazySequence<int> arithmetic(
+        [](size_t, const Sequence<int>* materialized) -> int {
+            return materialized->Get(materialized->GetLength() - 1) + 10;
+        },
+        &seed
+    );
+
+    int tailValues[] = {7, 8, 9};
+    ArraySequence<int> tailSeed(tailValues, 3);
+    LazySequence<int> concatenated = arithmetic.Concat(LazySequence<int>(&tailSeed));
+    LazySequence<int> mapped = concatenated.Map<int>([](int value) { return value * 2; });
+
+    ASSERT_EQ(7, concatenated.Get(Ordinal::Omega()), "Concat переносит первый элемент хвоста в omega");
+    ASSERT_EQ(9, concatenated.Get(Ordinal::OmegaPlus(2)), "Concat переносит весь конечный хвост в omega + n");
+    ASSERT_EQ(14, mapped.Get(Ordinal::Omega()), "Map сохраняет доступ к omega-элементу");
+    ASSERT_EQ(18, mapped.Get(Ordinal::OmegaPlus(2)), "Map сохраняет доступ к omega + n");
 }
 
 TEST(TestSequenceAndStringStreams) {
@@ -315,6 +385,49 @@ TEST(TestPumpAndMemoryWriter) {
     ASSERT_EQ(3, writer.GetItems().Get(2), "Третий элемент сохранён");
 }
 
+TEST(TestCircularBufferRollover) {
+    PrintSubHeader("Циклический буфер и вытеснение старых значений");
+    CircularBuffer<int> buffer(3);
+
+    ASSERT_TRUE(buffer.AppendReturningEvicted(10).IsNone(), "Первое добавление без вытеснения");
+    ASSERT_TRUE(buffer.AppendReturningEvicted(20).IsNone(), "Второе добавление без вытеснения");
+    ASSERT_TRUE(buffer.AppendReturningEvicted(30).IsNone(), "Третье добавление без вытеснения");
+    Option<int> evicted = buffer.AppendReturningEvicted(40);
+
+    ASSERT_TRUE(evicted.IsSome(), "На переполнении есть вытесненное значение");
+    ASSERT_EQ(10, evicted.GetValue(), "Вытесняется самый старый элемент");
+    ASSERT_EQ(3, static_cast<int>(buffer.GetLength()), "Длина остаётся равной capacity");
+    ASSERT_EQ(20, buffer.Get(0), "Первый актуальный элемент после rollover");
+    ASSERT_EQ(40, buffer.Get(2), "Последний элемент после rollover");
+}
+
+TEST(TestCsvAndJsonStreams) {
+    PrintSubHeader("CSV/JSON адаптеры потоков");
+    CsvReadStream<double> csvStream("1.5,2.5\n3.5, 4.5", ParseDoubleStrictTest);
+    csvStream.Open();
+
+    ASSERT_NEAR(1.5, csvStream.Read(), 1e-9, "CSV первое число");
+    ASSERT_NEAR(2.5, csvStream.Read(), 1e-9, "CSV второе число");
+    ASSERT_EQ(2, static_cast<int>(csvStream.Seek(2)), "CSV seek");
+    ASSERT_NEAR(3.5, csvStream.Read(), 1e-9, "CSV третье число после seek");
+
+    JsonArrayReadStream<double> jsonStream("[10, 20.5, -3, 8]", ParseDoubleStrictTest);
+    jsonStream.Open();
+    ASSERT_NEAR(10.0, jsonStream.Read(), 1e-9, "JSON первое число");
+    ASSERT_NEAR(20.5, jsonStream.Read(), 1e-9, "JSON второе число");
+    ASSERT_NEAR(-3.0, jsonStream.Read(), 1e-9, "JSON третье число");
+}
+
+TEST(TestTryReadBehavior) {
+    PrintSubHeader("TryRead возвращает None на конце потока");
+    StringReadStream<int> reader("4 5", ParseIntStrictTest);
+    reader.Open();
+
+    ASSERT_TRUE(reader.TryRead().IsSome(), "Первое TryRead успешно");
+    ASSERT_TRUE(reader.TryRead().IsSome(), "Второе TryRead успешно");
+    ASSERT_TRUE(reader.TryRead().IsNone(), "На конце потока возвращается None");
+}
+
 TEST(TestOnlineStatisticsSnapshot) {
     PrintSubHeader("Онлайн-метрики на детерминированных данных");
     OnlineStatistics statistics(2, 3.0);
@@ -358,9 +471,15 @@ int RunAllTests() {
     RUN_TEST(TestLazySequenceComposition);
     RUN_TEST(TestLazyWhereZipAndSubsequence);
     RUN_TEST(TestInfiniteLazyTake);
+    RUN_TEST(TestOrdinalBasics);
+    RUN_TEST(TestLazySequenceOrdinalAccess);
+    RUN_TEST(TestLazySequenceOrdinalConcatAndMap);
     RUN_TEST(TestSequenceAndStringStreams);
     RUN_TEST(TestLazyAndFileStreams);
     RUN_TEST(TestPumpAndMemoryWriter);
+    RUN_TEST(TestCircularBufferRollover);
+    RUN_TEST(TestCsvAndJsonStreams);
+    RUN_TEST(TestTryReadBehavior);
     RUN_TEST(TestOnlineStatisticsSnapshot);
     RUN_TEST(TestOnlineStatisticsAnomalies);
 

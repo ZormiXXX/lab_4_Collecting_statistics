@@ -1,0 +1,14 @@
+{
+  "count": 5,
+  "lastValue": 12.500000,
+  "minValue": 10.000000,
+  "maxValue": 12.500000,
+  "mean": 11.300000,
+  "variance": 0.935000,
+  "standardDeviation": 0.966954,
+  "median": 11.300000,
+  "windowAverage": 11.900000,
+  "anomalyDetected": false,
+  "anomalyZScore": 1.865310,
+  "anomalyCount": 0
+}
