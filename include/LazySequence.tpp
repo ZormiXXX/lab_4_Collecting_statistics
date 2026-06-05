@@ -1,6 +1,251 @@
 #pragma once
 
 template<class T>
+struct LazySequence<T>::ConstantLengthResolver {
+    Cardinal length;
+
+    explicit ConstantLengthResolver(const Cardinal& value) : length(value) {}
+
+    Cardinal operator()() const {
+        return length;
+    }
+};
+
+template<class T>
+struct LazySequence<T>::SequenceCopyGenerator {
+    MutableArraySequence<T> source;
+
+    explicit SequenceCopyGenerator(const Sequence<T>* sequence) {
+        int length = sequence->GetLength();
+        for (int index = 0; index < length; index++) {
+            source.Append(sequence->Get(index));
+        }
+    }
+
+    T operator()(size_t index, const Sequence<T>*) const {
+        return source.Get(static_cast<int>(index));
+    }
+};
+
+template<class T>
+struct LazySequence<T>::SeededRecurrenceGenerator {
+    MutableArraySequence<T> seedValues;
+    typename LazySequence<T>::NextFunction recurrenceRule;
+
+    SeededRecurrenceGenerator(
+        const typename LazySequence<T>::NextFunction& rule,
+        const Sequence<T>* seed
+    ) : recurrenceRule(rule) {
+        int seedLength = seed->GetLength();
+        for (int index = 0; index < seedLength; index++) {
+            seedValues.Append(seed->Get(index));
+        }
+    }
+
+    T operator()(size_t index, const Sequence<T>* materialized) const {
+        if (index < static_cast<size_t>(seedValues.GetLength())) {
+            return seedValues.Get(static_cast<int>(index));
+        }
+        return recurrenceRule(index, materialized);
+    }
+};
+
+template<class T>
+struct LazySequence<T>::IndexedGenerator {
+    std::function<T(size_t)> generator;
+
+    explicit IndexedGenerator(const std::function<T(size_t)>& indexedGenerator)
+        : generator(indexedGenerator) {}
+
+    T operator()(size_t index, const Sequence<T>*) const {
+        return generator(index);
+    }
+};
+
+template<class T>
+struct LazySequence<T>::SourceGenerator {
+    LazySequence<T> source;
+
+    explicit SourceGenerator(const LazySequence<T>& sourceSequence)
+        : source(sourceSequence) {}
+
+    T operator()(size_t index, const Sequence<T>*) const {
+        return source.Get(static_cast<int>(index));
+    }
+};
+
+template<class T>
+struct LazySequence<T>::SubsequenceGenerator {
+    LazySequence<T> source;
+    size_t start;
+
+    SubsequenceGenerator(const LazySequence<T>& sourceSequence, size_t startIndex)
+        : source(sourceSequence), start(startIndex) {}
+
+    T operator()(size_t index, const Sequence<T>*) const {
+        return source.Get(static_cast<int>(start + index));
+    }
+};
+
+template<class T>
+struct LazySequence<T>::PrependGenerator {
+    LazySequence<T> source;
+    T item;
+
+    PrependGenerator(const LazySequence<T>& sourceSequence, const T& newItem)
+        : source(sourceSequence), item(newItem) {}
+
+    T operator()(size_t index, const Sequence<T>*) const {
+        return index == 0 ? item : source.Get(static_cast<int>(index - 1));
+    }
+};
+
+template<class T>
+struct LazySequence<T>::ConcatGenerator {
+    LazySequence<T> left;
+    LazySequence<T> right;
+    size_t border;
+
+    ConcatGenerator(
+        const LazySequence<T>& leftSequence,
+        const LazySequence<T>& rightSequence,
+        size_t leftLength
+    ) : left(leftSequence), right(rightSequence), border(leftLength) {}
+
+    T operator()(size_t index, const Sequence<T>*) const {
+        if (index < border) {
+            return left.Get(static_cast<int>(index));
+        }
+        return right.Get(static_cast<int>(index - border));
+    }
+};
+
+template<class T>
+struct LazySequence<T>::InsertAtGenerator {
+    LazySequence<T> source;
+    T item;
+    size_t insertIndex;
+
+    InsertAtGenerator(
+        const LazySequence<T>& sourceSequence,
+        const T& newItem,
+        size_t targetIndex
+    ) : source(sourceSequence), item(newItem), insertIndex(targetIndex) {}
+
+    T operator()(size_t current, const Sequence<T>*) const {
+        if (current == insertIndex) {
+            return item;
+        }
+        if (current < insertIndex) {
+            return source.Get(static_cast<int>(current));
+        }
+        return source.Get(static_cast<int>(current - 1));
+    }
+};
+
+template<class T>
+template<class U, class Mapper>
+struct LazySequence<T>::MapGenerator {
+    LazySequence<T> source;
+    Mapper mapper;
+
+    MapGenerator(const LazySequence<T>& sourceSequence, Mapper valueMapper)
+        : source(sourceSequence), mapper(valueMapper) {}
+
+    U operator()(size_t index, const Sequence<U>*) const {
+        return mapper(source.Get(static_cast<int>(index)));
+    }
+};
+
+template<class T>
+template<class Predicate>
+struct LazySequence<T>::WhereLengthResolver {
+    LazySequence<T> source;
+    Predicate predicate;
+    Cardinal sourceLength;
+
+    WhereLengthResolver(
+        const LazySequence<T>& sourceSequence,
+        Predicate sourcePredicate,
+        const Cardinal& length
+    ) : source(sourceSequence), predicate(sourcePredicate), sourceLength(length) {}
+
+    Cardinal operator()() const {
+        if (sourceLength.IsInfinite()) {
+            return Cardinal::Infinite();
+        }
+
+        size_t matches = 0;
+        size_t total = sourceLength.AsFinite();
+        for (size_t index = 0; index < total; index++) {
+            if (predicate(source.Get(static_cast<int>(index)))) {
+                matches++;
+            }
+        }
+        return Cardinal::Finite(matches);
+    }
+};
+
+template<class T>
+template<class Predicate>
+struct LazySequence<T>::WhereGenerator {
+    LazySequence<T> source;
+    Predicate predicate;
+    size_t nextSourceIndex;
+
+    WhereGenerator(const LazySequence<T>& sourceSequence, Predicate sourcePredicate)
+        : source(sourceSequence), predicate(sourcePredicate), nextSourceIndex(0) {}
+
+    T operator()(size_t, const Sequence<T>*) {
+        while (true) {
+            T candidate = source.Get(static_cast<int>(nextSourceIndex));
+            nextSourceIndex++;
+            if (predicate(candidate)) {
+                return candidate;
+            }
+        }
+    }
+};
+
+template<class T>
+template<class U>
+struct LazySequence<T>::ZipSequenceGenerator {
+    LazySequence<T> source;
+    MutableArraySequence<U> other;
+
+    ZipSequenceGenerator(const LazySequence<T>& sourceSequence, const Sequence<U>& otherSequence)
+        : source(sourceSequence) {
+        for (int index = 0; index < otherSequence.GetLength(); index++) {
+            other.Append(otherSequence.Get(index));
+        }
+    }
+
+    Tuple<T, U> operator()(size_t index, const Sequence<Tuple<T, U>>*) const {
+        return Tuple<T, U>(
+            source.Get(static_cast<int>(index)),
+            other.Get(static_cast<int>(index))
+        );
+    }
+};
+
+template<class T>
+template<class U>
+struct LazySequence<T>::ZipLazyGenerator {
+    LazySequence<T> left;
+    LazySequence<U> right;
+
+    ZipLazyGenerator(const LazySequence<T>& leftSequence, const LazySequence<U>& rightSequence)
+        : left(leftSequence), right(rightSequence) {}
+
+    Tuple<T, U> operator()(size_t index, const Sequence<Tuple<T, U>>*) const {
+        return Tuple<T, U>(
+            left.Get(static_cast<int>(index)),
+            right.Get(static_cast<int>(index))
+        );
+    }
+};
+
+template<class T>
 LazySequence<T>::Generator::Generator(const LazySequence<T>& sequence, size_t startPosition)
     : owner(&sequence), position(startPosition) {}
 
@@ -208,15 +453,7 @@ LazySequence<T>::LazySequence(const Sequence<T>* sequence) : state(AllocateState
     state->exactLength = Cardinal::Finite(length);
     state->exactLengthKnown = true;
     state->finished = false;
-
-    MutableArraySequence<T> source;
-    for (int index = 0; index < length; index++) {
-        source.Append(sequence->Get(index));
-    }
-
-    state->nextFunction = [source](size_t index, const Sequence<T>*) -> T {
-        return source.Get(static_cast<int>(index));
-    };
+    state->nextFunction = SequenceCopyGenerator(sequence);
 }
 
 template<class T>
@@ -231,20 +468,10 @@ LazySequence<T>::LazySequence(const NextFunction& recurrenceRule, const Sequence
         throw InvalidArgument("seed length must be non-negative");
     }
 
-    MutableArraySequence<T> seedValues;
-    for (int index = 0; index < seedLength; index++) {
-        seedValues.Append(seed->Get(index));
-    }
-
     state->lengthHint = Cardinal::Infinite();
     state->exactLengthKnown = false;
     state->finished = false;
-    state->nextFunction = [seedValues, recurrenceRule](size_t index, const Sequence<T>* materialized) -> T {
-        if (index < static_cast<size_t>(seedValues.GetLength())) {
-            return seedValues.Get(static_cast<int>(index));
-        }
-        return recurrenceRule(index, materialized);
-    };
+    state->nextFunction = SeededRecurrenceGenerator(recurrenceRule, seed);
 }
 
 template<class T>
@@ -290,9 +517,7 @@ LazySequence<T> LazySequence<T>::GenerateIndexed(
     return Create(
         lengthHint,
         LengthResolver(),
-        [generator](size_t index, const Sequence<T>*) -> T {
-            return generator(index);
-        }
+        IndexedGenerator(generator)
     );
 }
 
@@ -413,12 +638,8 @@ LazySequence<T> LazySequence<T>::GetSubsequence(int startIndex, int endIndex) co
 
     return Create(
         Cardinal::Finite(count),
-        [count]() {
-            return Cardinal::Finite(count);
-        },
-        [source, start](size_t index, const Sequence<T>*) -> T {
-            return source.Get(static_cast<int>(start + index));
-        }
+        ConstantLengthResolver(Cardinal::Finite(count)),
+        SubsequenceGenerator(source, start)
     );
 }
 
@@ -439,20 +660,16 @@ LazySequence<T> LazySequence<T>::Prepend(const T& item) const {
         LazySequence<T> omegaTail = source.GetOmegaTail();
         return CreateWithTail(
             newLength,
-            [newLength]() { return newLength; },
-            [source, item](size_t index, const Sequence<T>*) -> T {
-                return index == 0 ? item : source.Get(static_cast<int>(index - 1));
-            },
+            ConstantLengthResolver(newLength),
+            PrependGenerator(source, item),
             &omegaTail
         );
     }
 
     return Create(
         newLength,
-        [newLength]() { return newLength; },
-        [source, item](size_t index, const Sequence<T>*) -> T {
-            return index == 0 ? item : source.Get(static_cast<int>(index - 1));
-        }
+        ConstantLengthResolver(newLength),
+        PrependGenerator(source, item)
     );
 }
 
@@ -468,20 +685,16 @@ LazySequence<T> LazySequence<T>::Concat(const LazySequence<T>& other) const {
             LazySequence<T> mergedTail = leftTail.Concat(right);
             return CreateWithTail(
                 Cardinal::Infinite(),
-                []() { return Cardinal::Infinite(); },
-                [left](size_t index, const Sequence<T>*) -> T {
-                    return left.Get(static_cast<int>(index));
-                },
+                ConstantLengthResolver(Cardinal::Infinite()),
+                SourceGenerator(left),
                 &mergedTail
             );
         }
 
         return CreateWithTail(
             Cardinal::Infinite(),
-            []() { return Cardinal::Infinite(); },
-            [left](size_t index, const Sequence<T>*) -> T {
-                return left.Get(static_cast<int>(index));
-            },
+            ConstantLengthResolver(Cardinal::Infinite()),
+            SourceGenerator(left),
             &right
         );
     }
@@ -494,26 +707,16 @@ LazySequence<T> LazySequence<T>::Concat(const LazySequence<T>& other) const {
         LazySequence<T> omegaTail = right.GetOmegaTail();
         return CreateWithTail(
             totalLength,
-            [totalLength]() { return totalLength; },
-            [left, right, border](size_t index, const Sequence<T>*) -> T {
-                if (index < border) {
-                    return left.Get(static_cast<int>(index));
-                }
-                return right.Get(static_cast<int>(index - border));
-            },
+            ConstantLengthResolver(totalLength),
+            ConcatGenerator(left, right, border),
             &omegaTail
         );
     }
 
     return Create(
         totalLength,
-        [totalLength]() { return totalLength; },
-        [left, right, border](size_t index, const Sequence<T>*) -> T {
-            if (index < border) {
-                return left.Get(static_cast<int>(index));
-            }
-            return right.Get(static_cast<int>(index - border));
-        }
+        ConstantLengthResolver(totalLength),
+        ConcatGenerator(left, right, border)
     );
 }
 
@@ -543,32 +746,16 @@ LazySequence<T> LazySequence<T>::InsertAt(const T& item, int index) const {
         LazySequence<T> omegaTail = source.GetOmegaTail();
         return CreateWithTail(
             newLength,
-            [newLength]() { return newLength; },
-            [source, item, insertIndex](size_t current, const Sequence<T>*) -> T {
-                if (current == insertIndex) {
-                    return item;
-                }
-                if (current < insertIndex) {
-                    return source.Get(static_cast<int>(current));
-                }
-                return source.Get(static_cast<int>(current - 1));
-            },
+            ConstantLengthResolver(newLength),
+            InsertAtGenerator(source, item, insertIndex),
             &omegaTail
         );
     }
 
     return Create(
         newLength,
-        [newLength]() { return newLength; },
-        [source, item, insertIndex](size_t current, const Sequence<T>*) -> T {
-            if (current == insertIndex) {
-                return item;
-            }
-            if (current < insertIndex) {
-                return source.Get(static_cast<int>(current));
-            }
-            return source.Get(static_cast<int>(current - 1));
-        }
+        ConstantLengthResolver(newLength),
+        InsertAtGenerator(source, item, insertIndex)
     );
 }
 
@@ -582,20 +769,16 @@ LazySequence<U> LazySequence<T>::Map(Mapper mapper) const {
         LazySequence<U> mappedTail = omegaTail.template Map<U>(mapper);
         return LazySequence<U>::CreateWithTail(
             length,
-            [length]() { return length; },
-            [source, mapper](size_t index, const Sequence<U>*) -> U {
-                return mapper(source.Get(static_cast<int>(index)));
-            },
+            typename LazySequence<U>::ConstantLengthResolver(length),
+            typename LazySequence<T>::template MapGenerator<U, Mapper>(source, mapper),
             &mappedTail
         );
     }
 
     return LazySequence<U>::Create(
         length,
-        [length]() { return length; },
-        [source, mapper](size_t index, const Sequence<U>*) -> U {
-            return mapper(source.Get(static_cast<int>(index)));
-        }
+        typename LazySequence<U>::ConstantLengthResolver(length),
+        typename LazySequence<T>::template MapGenerator<U, Mapper>(source, mapper)
     );
 }
 
@@ -630,35 +813,13 @@ template<class Predicate>
 LazySequence<T> LazySequence<T>::Where(Predicate predicate) const {
     LazySequence<T> source = *this;
     Cardinal sourceLength = source.GetLength();
-    size_t nextSourceIndex = 0;
     if (source.HasOmegaTail()) {
         LazySequence<T> omegaTail = source.GetOmegaTail();
         LazySequence<T> filteredTail = omegaTail.Where(predicate);
         return CreateWithTail(
             sourceLength.IsInfinite() ? Cardinal::Infinite() : Cardinal::Finite(0),
-            [source, predicate, sourceLength]() -> Cardinal {
-                if (sourceLength.IsInfinite()) {
-                    return Cardinal::Infinite();
-                }
-
-                size_t matches = 0;
-                size_t total = sourceLength.AsFinite();
-                for (size_t index = 0; index < total; index++) {
-                    if (predicate(source.Get(static_cast<int>(index)))) {
-                        matches++;
-                    }
-                }
-                return Cardinal::Finite(matches);
-            },
-            [source, predicate, nextSourceIndex](size_t, const Sequence<T>*) mutable -> T {
-                while (true) {
-                    T candidate = source.Get(static_cast<int>(nextSourceIndex));
-                    nextSourceIndex++;
-                    if (predicate(candidate)) {
-                        return candidate;
-                    }
-                }
-            },
+            WhereLengthResolver<Predicate>(source, predicate, sourceLength),
+            WhereGenerator<Predicate>(source, predicate),
             &filteredTail,
             false,
             sourceLength.IsInfinite()
@@ -667,29 +828,8 @@ LazySequence<T> LazySequence<T>::Where(Predicate predicate) const {
 
     return Create(
         sourceLength.IsInfinite() ? Cardinal::Infinite() : Cardinal::Finite(0),
-        [source, predicate, sourceLength]() -> Cardinal {
-            if (sourceLength.IsInfinite()) {
-                return Cardinal::Infinite();
-            }
-
-            size_t matches = 0;
-            size_t total = sourceLength.AsFinite();
-            for (size_t index = 0; index < total; index++) {
-                if (predicate(source.Get(static_cast<int>(index)))) {
-                    matches++;
-                }
-            }
-            return Cardinal::Finite(matches);
-        },
-        [source, predicate, nextSourceIndex](size_t, const Sequence<T>*) mutable -> T {
-            while (true) {
-                T candidate = source.Get(static_cast<int>(nextSourceIndex));
-                nextSourceIndex++;
-                if (predicate(candidate)) {
-                    return candidate;
-                }
-            }
-        },
+        WhereLengthResolver<Predicate>(source, predicate, sourceLength),
+        WhereGenerator<Predicate>(source, predicate),
         false,
         sourceLength.IsInfinite()
     );
@@ -700,20 +840,11 @@ template<class U>
 LazySequence<Tuple<T, U>> LazySequence<T>::Zip(const Sequence<U>& other) const {
     LazySequence<T> source = *this;
     Cardinal length = Cardinal::Min(source.GetLength(), Cardinal::Finite(other.GetLength()));
-    MutableArraySequence<U> copied;
-    for (int index = 0; index < other.GetLength(); index++) {
-        copied.Append(other.Get(index));
-    }
 
     return LazySequence<Tuple<T, U>>::Create(
         length,
-        [length]() { return length; },
-        [source, copied](size_t index, const Sequence<Tuple<T, U>>*) -> Tuple<T, U> {
-            return Tuple<T, U>(
-                source.Get(static_cast<int>(index)),
-                copied.Get(static_cast<int>(index))
-            );
-        }
+        typename LazySequence<Tuple<T, U>>::ConstantLengthResolver(length),
+        typename LazySequence<T>::template ZipSequenceGenerator<U>(source, other)
     );
 }
 
@@ -726,13 +857,8 @@ LazySequence<Tuple<T, U>> LazySequence<T>::Zip(const LazySequence<U>& other) con
 
     return LazySequence<Tuple<T, U>>::Create(
         length,
-        [length]() { return length; },
-        [left, right](size_t index, const Sequence<Tuple<T, U>>*) -> Tuple<T, U> {
-            return Tuple<T, U>(
-                left.Get(static_cast<int>(index)),
-                right.Get(static_cast<int>(index))
-            );
-        }
+        typename LazySequence<Tuple<T, U>>::ConstantLengthResolver(length),
+        typename LazySequence<T>::template ZipLazyGenerator<U>(left, right)
     );
 }
 

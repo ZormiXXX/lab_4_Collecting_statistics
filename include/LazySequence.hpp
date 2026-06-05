@@ -27,6 +27,31 @@ public:
     };
 
 private:
+    struct ConstantLengthResolver;
+    struct SequenceCopyGenerator;
+    struct SeededRecurrenceGenerator;
+    struct IndexedGenerator;
+    struct SourceGenerator;
+    struct SubsequenceGenerator;
+    struct PrependGenerator;
+    struct ConcatGenerator;
+    struct InsertAtGenerator;
+
+    template<class U, class Mapper>
+    struct MapGenerator;
+
+    template<class Predicate>
+    struct WhereLengthResolver;
+
+    template<class Predicate>
+    struct WhereGenerator;
+
+    template<class U>
+    struct ZipSequenceGenerator;
+
+    template<class U>
+    struct ZipLazyGenerator;
+
     struct State {
         size_t refCount;
         Cardinal lengthHint;
