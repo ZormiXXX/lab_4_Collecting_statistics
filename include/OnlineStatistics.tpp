@@ -17,6 +17,63 @@ inline void OnlineStatistics::PushMedian(double value) {
     RebalanceHeaps();
 }
 
+inline void OnlineStatistics::UpdateAnomalyState(double value) {
+    if (count < 2) {
+        lastAnomalyDetected = false;
+        lastAnomalyZScore = 0.0;
+        return;
+    }
+
+    double varianceBefore = m2 / static_cast<double>(count - 1);
+    double deviationBefore = std::sqrt(varianceBefore);
+    if (deviationBefore <= 1e-12) {
+        lastAnomalyDetected = false;
+        lastAnomalyZScore = 0.0;
+        return;
+    }
+
+    lastAnomalyZScore = std::fabs(value - mean) / deviationBefore;
+    lastAnomalyDetected = lastAnomalyZScore >= anomalyThreshold;
+    if (lastAnomalyDetected) {
+        totalAnomalies++;
+    }
+}
+
+inline void OnlineStatistics::UpdateMinMax(double value) {
+    if (count == 0) {
+        minValue = value;
+        maxValue = value;
+        return;
+    }
+
+    if (value < minValue) {
+        minValue = value;
+    }
+    if (value > maxValue) {
+        maxValue = value;
+    }
+}
+
+inline void OnlineStatistics::UpdateMoments(double value) {
+    count++;
+    double delta = value - mean;
+    mean += delta / static_cast<double>(count);
+    double delta2 = value - mean;
+    m2 += delta * delta2;
+}
+
+inline void OnlineStatistics::UpdateWindow(double value) {
+    if (!window) {
+        return;
+    }
+
+    Option<double> evicted = window->AppendReturningEvicted(value);
+    windowSum += value;
+    if (evicted.IsSome()) {
+        windowSum -= evicted.GetValue();
+    }
+}
+
 inline OnlineStatistics::OnlineStatistics(size_t rollingWindowSize, double anomalyZScoreThreshold)
     : count(0),
       mean(0.0),
@@ -58,52 +115,11 @@ inline void OnlineStatistics::Reset() {
 
 inline void OnlineStatistics::Add(double value) {
     lastValue = value;
-
-    if (count >= 2) {
-        double varianceBefore = m2 / static_cast<double>(count - 1);
-        double deviationBefore = std::sqrt(varianceBefore);
-        if (deviationBefore > 1e-12) {
-            lastAnomalyZScore = std::fabs(value - mean) / deviationBefore;
-            lastAnomalyDetected = lastAnomalyZScore >= anomalyThreshold;
-            if (lastAnomalyDetected) {
-                totalAnomalies++;
-            }
-        } else {
-            lastAnomalyDetected = false;
-            lastAnomalyZScore = 0.0;
-        }
-    } else {
-        lastAnomalyDetected = false;
-        lastAnomalyZScore = 0.0;
-    }
-
-    if (count == 0) {
-        minValue = value;
-        maxValue = value;
-    } else {
-        if (value < minValue) {
-            minValue = value;
-        }
-        if (value > maxValue) {
-            maxValue = value;
-        }
-    }
-
-    count++;
-    double delta = value - mean;
-    mean += delta / static_cast<double>(count);
-    double delta2 = value - mean;
-    m2 += delta * delta2;
-
+    UpdateAnomalyState(value);
+    UpdateMinMax(value);
+    UpdateMoments(value);
     PushMedian(value);
-
-    if (window) {
-        Option<double> evicted = window->AppendReturningEvicted(value);
-        windowSum += value;
-        if (evicted.IsSome()) {
-            windowSum -= evicted.GetValue();
-        }
-    }
+    UpdateWindow(value);
 }
 
 inline size_t OnlineStatistics::GetCount() const {

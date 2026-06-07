@@ -104,19 +104,19 @@ template<class T>
 struct LazySequence<T>::ConcatGenerator {
     LazySequence<T> left;
     LazySequence<T> right;
-    size_t border;
+    size_t leftBorder;
 
     ConcatGenerator(
         const LazySequence<T>& leftSequence,
         const LazySequence<T>& rightSequence,
         size_t leftLength
-    ) : left(leftSequence), right(rightSequence), border(leftLength) {}
+    ) : left(leftSequence), right(rightSequence), leftBorder(leftLength) {}
 
     T operator()(size_t index, const Sequence<T>*) const {
-        if (index < border) {
+        if (index < leftBorder) {
             return left.Get(static_cast<int>(index));
         }
-        return right.Get(static_cast<int>(index - border));
+        return right.Get(static_cast<int>(index - leftBorder));
     }
 };
 
@@ -674,23 +674,11 @@ LazySequence<T> LazySequence<T>::Prepend(const T& item) const {
 }
 
 template<class T>
-LazySequence<T> LazySequence<T>::Concat(const LazySequence<T>& other) const {
-    LazySequence<T> left = *this;
-    LazySequence<T> right = other;
-    Cardinal leftLength = left.GetLength();
-
-    if (leftLength.IsInfinite()) {
-        if (left.HasOmegaTail()) {
-            LazySequence<T> leftTail = left.GetOmegaTail();
-            LazySequence<T> mergedTail = leftTail.Concat(right);
-            return CreateWithTail(
-                Cardinal::Infinite(),
-                ConstantLengthResolver(Cardinal::Infinite()),
-                SourceGenerator(left),
-                &mergedTail
-            );
-        }
-
+LazySequence<T> LazySequence<T>::ConcatAfterInfiniteLeft(
+    const LazySequence<T>& left,
+    const LazySequence<T>& right
+) const {
+    if (!left.HasOmegaTail()) {
         return CreateWithTail(
             Cardinal::Infinite(),
             ConstantLengthResolver(Cardinal::Infinite()),
@@ -699,16 +687,32 @@ LazySequence<T> LazySequence<T>::Concat(const LazySequence<T>& other) const {
         );
     }
 
+    LazySequence<T> leftTail = left.GetOmegaTail();
+    LazySequence<T> mergedTail = leftTail.Concat(right);
+    return CreateWithTail(
+        Cardinal::Infinite(),
+        ConstantLengthResolver(Cardinal::Infinite()),
+        SourceGenerator(left),
+        &mergedTail
+    );
+}
+
+template<class T>
+LazySequence<T> LazySequence<T>::ConcatAfterFiniteLeft(
+    const LazySequence<T>& left,
+    const LazySequence<T>& right,
+    const Cardinal& leftLength
+) const {
     Cardinal rightLength = right.GetLength();
     Cardinal totalLength = Cardinal::Add(leftLength, rightLength);
-    size_t border = leftLength.AsFinite();
+    size_t leftBorder = leftLength.AsFinite();
 
     if (right.HasOmegaTail()) {
         LazySequence<T> omegaTail = right.GetOmegaTail();
         return CreateWithTail(
             totalLength,
             ConstantLengthResolver(totalLength),
-            ConcatGenerator(left, right, border),
+            ConcatGenerator(left, right, leftBorder),
             &omegaTail
         );
     }
@@ -716,8 +720,20 @@ LazySequence<T> LazySequence<T>::Concat(const LazySequence<T>& other) const {
     return Create(
         totalLength,
         ConstantLengthResolver(totalLength),
-        ConcatGenerator(left, right, border)
+        ConcatGenerator(left, right, leftBorder)
     );
+}
+
+template<class T>
+LazySequence<T> LazySequence<T>::Concat(const LazySequence<T>& other) const {
+    LazySequence<T> left = *this;
+    LazySequence<T> right = other;
+    Cardinal leftLength = left.GetLength();
+
+    if (leftLength.IsInfinite()) {
+        return ConcatAfterInfiniteLeft(left, right);
+    }
+    return ConcatAfterFiniteLeft(left, right, leftLength);
 }
 
 template<class T>

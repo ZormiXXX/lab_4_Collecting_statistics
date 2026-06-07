@@ -492,5 +492,8 @@ int RunAllTests() {
               << (success ? "Все тесты пройдены." : "Есть непройденные тесты.")
               << COLOR_RESET << std::endl;
 
+    delete allResults;
+    allResults = nullptr;
+
     return success ? 0 : 1;
 }

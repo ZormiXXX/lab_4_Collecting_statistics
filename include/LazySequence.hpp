@@ -97,6 +97,12 @@ private:
     void MaterializeAllFinite() const;
     bool HasOmegaTail() const;
     LazySequence<T> GetOmegaTail() const;
+    LazySequence<T> ConcatAfterInfiniteLeft(const LazySequence<T>& left, const LazySequence<T>& right) const;
+    LazySequence<T> ConcatAfterFiniteLeft(
+        const LazySequence<T>& left,
+        const LazySequence<T>& right,
+        const Cardinal& leftLength
+    ) const;
 
 public:
     LazySequence();

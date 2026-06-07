@@ -38,6 +38,10 @@ private:
 
     void RebalanceHeaps();
     void PushMedian(double value);
+    void UpdateAnomalyState(double value);
+    void UpdateMinMax(double value);
+    void UpdateMoments(double value);
+    void UpdateWindow(double value);
 
 public:
     explicit OnlineStatistics(size_t rollingWindowSize = 0, double anomalyZScoreThreshold = 3.0);
